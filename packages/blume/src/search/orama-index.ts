@@ -109,6 +109,8 @@ const addBigrams = (run: string, tokens: Set<string>): void => {
  * are not word-like, so they end a run — 「クーリング・オフ」 bigrams either
  * side of the interpunct rather than across it.
  */
+type SegmentingTokenizer = Tokenizer & { bigrammed?: boolean };
+
 const segmentingTokenizer = (locale?: string): Tokenizer | undefined => {
   const language = locale?.toLowerCase().split(/[-_]/u)[0] ?? "";
   if (!SEGMENTED_LANGUAGES.has(language)) {
@@ -121,7 +123,8 @@ const segmentingTokenizer = (locale?: string): Tokenizer | undefined => {
   // Keyed off the same set the strict query pass reads, so an index is never
   // built from bigrams that the query side then matches loosely.
   const bigram = BIGRAM_LANGUAGES.has(language);
-  return {
+  const tokenizerImpl: SegmentingTokenizer = {
+    bigrammed: bigram,
     language,
     normalizationCache: new Map(),
     tokenize: (raw: string): string[] => {
@@ -149,16 +152,18 @@ const segmentingTokenizer = (locale?: string): Tokenizer | undefined => {
       return [...tokens];
     },
   };
+  return tokenizerImpl;
 };
 
 /**
  * Build an in-memory Orama full-text index from search documents. Shared by the
  * Orama client loader (browser), the MCP server, and Ask AI grounding (Node),
- * so ranking is identical wherever docs are queried. `locale` — the site's
- * `i18n.defaultLocale` — swaps in a word-segmenting tokenizer for languages
- * written without spaces (Japanese, Chinese, Korean, Thai); the tokenizer
- * belongs to the database, so on a mixed-locale site it applies to every
- * document, which is safe because Latin words survive segmentation intact.
+ * so every surface derives the same search behavior from the site's locale.
+ * `locale` — the site's `i18n.defaultLocale` — swaps in a word-segmenting
+ * tokenizer for languages written without spaces (Japanese, Chinese, Korean,
+ * Thai); the tokenizer belongs to the database, so on a mixed-locale site it
+ * applies to every document, which is safe because Latin words survive
+ * segmentation intact.
  */
 export const buildOramaIndex = async (
   documents: OramaDoc[],
@@ -200,7 +205,9 @@ export const queryOramaIndex = async (
     term,
     ...(locale ? { where: { locale: { eq: locale } } } : {}),
   };
-  const bigrammed = BIGRAM_LANGUAGES.has(db.tokenizer?.language ?? "");
+  const bigrammed = Boolean(
+    (db.tokenizer as SegmentingTokenizer | undefined)?.bigrammed
+  );
   const strict = bigrammed
     ? await search(db, { ...params, threshold: ALL_TOKENS })
     : undefined;
